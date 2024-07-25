@@ -1,0 +1,63 @@
+---
+- name: Configure SNMPv3 secured
+  hosts: all
+  vars:
+    SNMP_CONFD: "/etc/snmp/conf.d"
+    SNMP_CONFD_CONF: "solarwinds.conf"
+
+  tasks:
+    - name: Update server for latest packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+      become: true
+
+    - name: Install required packages
+      ansible.builtin.dnf:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - net-snmp
+        - net-snmp-utils
+      become: true
+
+    - name: Ensure SNMP conf.d directory exists
+      ansible.builtin.file:
+        path: "{{ SNMP_CONFD }}"
+        state: directory
+      become: true
+
+    - name: Add includeDir to snmpd.conf
+      ansible.builtin.blockinfile:
+        path: /etc/snmp/snmpd.conf
+        block: |
+          # Include custom configuration with SNMP installation
+          includeDir {{ SNMP_CONFD }}
+        marker: "# {mark} ANSIBLE MANAGED BLOCK"
+      become: true
+
+    - name: Create SNMP conf.d configuration file
+      ansible.builtin.copy:
+        dest: "{{ SNMP_CONFD }}/{{ SNMP_CONFD_CONF }}"
+        content: |
+          createUser {{ lookup('env', 'SNMP_USER') }} SHA-512 {{ lookup('env', 'SNMP_AUTH_PASS') }} AES-256 {{ lookup('env', 'SNMP_PRIV_PASS') }}
+          rouser {{ lookup('env', 'SNMP_USER') }} authpriv
+      become: true
+
+    - name: Restart SNMP daemon and enable at boot
+      ansible.builtin.systemd:
+        name: snmpd
+        state: restarted
+        enabled: true
+      become: true
+
+    - name: Validate SNMP configuration
+      ansible.builtin.shell:
+        cmd: >
+          snmpget -v 3 -u {{ lookup('env', 'SNMP_USER') }} -l authPriv -a SHA-512 -A "{{ lookup('env', 'SNMP_AUTH_PASS') }}" -x AES-256 -X "{{ lookup('env', 'SNMP_PRIV_PASS') }}" localhost 1.3.6.1.2.1.1.1.0
+      become: true
+      register: snmp_validation
+
+    - name: Display SNMP validation result
+      ansible.builtin.debug:
+        var: snmp_validation.stdout
